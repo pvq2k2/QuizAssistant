@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="quiz_accessibility_desc">QuizAssistant dùng quyền này để tự chạm vào đáp án đúng khi bật Auto Mode.</string>
+</resources>

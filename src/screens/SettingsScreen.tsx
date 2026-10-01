@@ -3,7 +3,12 @@ import { View, Text, Button, TextInput, StyleSheet, ScrollView, Alert } from 're
 import { theme } from '../theme';
 import { CLICK_DELAY_OPTIONS } from '../models/types';
 import { useAppStore } from '../store/AppStore';
-import { captureAndOcr, isNativeCaptureAvailable } from '../services/realScan';
+import {
+  captureAndOcr,
+  isNativeCaptureAvailable,
+  isAccessibilityConnected,
+  openAccessibilitySettings,
+} from '../services/realScan';
 import type { QuizSetId } from '../models/types';
 
 // §27 + §42: persist autoMode/clickDelay/bộ mặc định + Test OCR + import/export JSON (§16).
@@ -83,6 +88,7 @@ export function SettingsScreen({ navigation }: any) {
           </Text>
         ))}
       </View>
+      <A11yRow />
 
       <Text style={styles.h}>OCR</Text>
       <Button title="Cấu hình vùng đọc" onPress={() => navigation.navigate('OcrRegion')} />
@@ -116,6 +122,28 @@ export function SettingsScreen({ navigation }: any) {
 
 function SetPickerHint({ setId }: { setId: QuizSetId }) {
   return <Text style={{ color: '#9ca3af', marginTop: 12 }}>Import không cần đúng bộ đang chọn ({setId}) — mỗi item tự mang quizSetId.</Text>;
+}
+
+function A11yRow() {
+  const [connected, setConnected] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    if (!isNativeCaptureAvailable()) return;
+    isAccessibilityConnected().then(setConnected).catch(() => setConnected(false));
+  }, []);
+  if (!isNativeCaptureAvailable()) return null;
+  return (
+    <View style={{ marginTop: 8 }}>
+      <Text>
+        Accessibility auto-click: {connected === null ? '…' : connected ? '✅ đã bật' : '❌ chưa bật'}
+      </Text>
+      <View style={{ marginTop: 4 }}>
+        <Button title="Mở cài đặt Accessibility" onPress={() => openAccessibilitySettings()} />
+      </View>
+      <Text style={{ color: '#9ca3af', fontSize: 12, marginTop: 4 }}>
+        Bật "QuizAssistant" trong màn hình Accessibility để Auto Mode tự chạm đáp án.
+      </Text>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({

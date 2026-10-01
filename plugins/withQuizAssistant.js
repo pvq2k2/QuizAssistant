@@ -1,9 +1,11 @@
 // withQuizAssistant — Expo config plugin (CNG-safe).
 // Mỗi lần `expo prebuild` (kể cả --clean) plugin sẽ:
-//  1. Copy 4 file Kotlin (plugins/quiz-native) vào android/.../com/quizassistant/quizassistant/
-//  2. Thêm ML Kit text-recognition vào app/build.gradle
-//  3. Khai báo QuizCaptureService (foregroundServiceType=mediaProjection) trong AndroidManifest
-//  4. Đăng ký QuizCapturePackage trong MainApplication.kt
+//  1. Copy 9 file Kotlin (plugins/quiz-native) vào android/.../com/quizassistant/quizassistant/
+//  2. Copy res/ (accessibility config + strings)
+//  3. Thêm ML Kit text-recognition vào app/build.gradle
+//  4. Khai báo QuizCaptureService (FGS mediaProjection) + FloatingBubbleService
+//     + QuizClickService (accessibility) trong AndroidManifest
+//  5. Đăng ký QuizCapturePackage trong MainApplication.kt
 //
 // Không sửa gì trong android/ bằng tay — mọi thứ tái tạo được từ plugin.
 
@@ -21,9 +23,24 @@ const KT_FILES = [
   'QuizCapturePackage.kt',
   'QuizCaptureService.kt',
   'QuizOcrHelper.kt',
+  'QuizPrefs.kt',
+  'QuizMatcherKt.kt',
+  'QuizShot.kt',
+  'FloatingBubbleService.kt',
+  'QuizClickService.kt',
 ];
 const MLKIT_DEP = 'implementation("com.google.mlkit:text-recognition:16.0.1")';
-const SERVICE_NAME = '.quizassistant.QuizCaptureService';
+const SERVICES = [
+  {
+    'android:name': '.quizassistant.QuizCaptureService',
+    'android:exported': 'false',
+    'android:foregroundServiceType': 'mediaProjection',
+  },
+  {
+    'android:name': '.quizassistant.FloatingBubbleService',
+    'android:exported': 'false',
+  },
+];
 
 function withQuizNativeFiles(config) {
   return withDangerousMod(config, [
@@ -44,6 +61,12 @@ function withQuizNativeFiles(config) {
         }
         fs.copyFileSync(src, path.join(destDir, f));
       }
+
+      // Copy res/ (accessibility config + strings), merge cây thư mục.
+      copyDir(
+        path.join(projectRoot, 'plugins', 'quiz-native', 'res'),
+        path.join(platformRoot, 'app/src/main/res'),
+      );
 
       // Patch MainApplication.kt — đăng ký package (idempotent).
       const appId = cfg.android?.package ?? 'com.quizassistant';
@@ -95,16 +118,38 @@ function withQuizManifest(config) {
     const mainApp = apps[0];
     if (!mainApp) throw new Error('[withQuizAssistant] no <application> in manifest');
     mainApp.service = mainApp.service ?? [];
-    const exists = mainApp.service.some(
-      (s) => s.$ && s.$['android:name'] === SERVICE_NAME,
+    for (const attrs of SERVICES) {
+      const exists = mainApp.service.some(
+        (s) => s.$ && s.$['android:name'] === attrs['android:name'],
+      );
+      if (!exists) mainApp.service.push({ $: { ...attrs } });
+    }
+    // Accessibility service: intent-filter + config meta-data.
+    const a11y = mainApp.service.find(
+      (s) => s.$ && s.$['android:name'] === '.quizassistant.QuizClickService',
     );
-    if (!exists) {
+    if (!a11y) {
       mainApp.service.push({
         $: {
-          'android:name': SERVICE_NAME,
-          'android:exported': 'false',
-          'android:foregroundServiceType': 'mediaProjection',
+          'android:name': '.quizassistant.QuizClickService',
+          'android:permission': 'android.permission.BIND_ACCESSIBILITY_SERVICE',
+          'android:exported': 'true',
         },
+        'intent-filter': [
+          {
+            action: [
+              { $: { 'android:name': 'android.accessibilityservice.AccessibilityService' } },
+            ],
+          },
+        ],
+        'meta-data': [
+          {
+            $: {
+              'android:name': 'android.accessibilityservice',
+              'android:resource': '@xml/quiz_accessibility_config',
+            },
+          },
+        ],
       });
     }
     return cfg;
@@ -123,6 +168,18 @@ function withQuizGradleDep(config) {
     }
     return cfg;
   });
+}
+
+// Copy đệ quy srcDir -> destDir (merge, ghi đè file trùng tên).
+function copyDir(srcDir, destDir) {
+  if (!fs.existsSync(srcDir)) return;
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const e of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    const s = path.join(srcDir, e.name);
+    const d = path.join(destDir, e.name);
+    if (e.isDirectory()) copyDir(s, d);
+    else fs.copyFileSync(s, d);
+  }
 }
 
 function withQuizAssistant(config) {

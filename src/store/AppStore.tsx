@@ -9,6 +9,15 @@ import { QuestionStorage, MemoryKV } from '../storage/QuestionStorage';
 import type { KeyValue } from '../storage/QuestionStorage';
 import { SettingsStorage } from '../storage/SettingsStorage';
 import { AsyncStorageKV } from '../storage/asyncStorageKV';
+import {
+  isNativeCaptureAvailable,
+  syncAssistantData,
+  startBubble,
+  stopBubble,
+  isBubbleRunning,
+  canDrawOverlays,
+  openOverlaySettings,
+} from '../services/realScan';
 import seedData from '../../assets/questions.seed.json';
 
 const SEED_FLAG_KEY = '@quiz/seeded:v1';
@@ -34,6 +43,11 @@ interface AppStoreValue {
   scan(ocrText: string, setId: QuizSetId): ScanResult;
   /** Match câu hỏi nằm trong text OCR full-screen (substring sau normalize). */
   scanFullText(ocrText: string, setId: QuizSetId): ScanResult;
+  bubbleRunning: boolean;
+  refreshBubbleState(): Promise<void>;
+  /** Bật assistant: xin quyền chụp + overlay, sync DB, hiện bubble. */
+  startAssistant(): Promise<void>;
+  stopAssistant(): Promise<void>;
 }
 
 const AppStoreCtx = createContext<AppStoreValue | null>(null);
@@ -189,6 +203,61 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     [questions],
   );
 
+  const [bubbleRunning, setBubbleRunning] = useState(false);
+
+  // Đẩy DB + settings sang native mỗi khi đổi (bubble chạy độc lập khi app background).
+  useEffect(() => {
+    if (!ready || !isNativeCaptureAvailable()) return;
+    syncAssistantData(
+      questions.map(({ id, quizSetId, question, correctIndex }) => ({ id, quizSetId, question, correctIndex })),
+      selectedSet,
+      autoMode,
+      clickDelayMs,
+    ).catch(() => {});
+  }, [ready, questions, selectedSet, autoMode, clickDelayMs]);
+
+  const refreshBubbleState = useCallback(async () => {
+    if (!isNativeCaptureAvailable()) {
+      setBubbleRunning(false);
+      return;
+    }
+    try {
+      setBubbleRunning(await isBubbleRunning());
+    } catch {
+      setBubbleRunning(false);
+    }
+  }, []);
+
+  const startAssistant = useCallback(async () => {
+    if (!isNativeCaptureAvailable()) {
+      throw new Error('Bật bubble cần dev-build Android. Trên Expo Go chỉ dùng quét tay.');
+    }
+    const okOverlay = await canDrawOverlays();
+    if (!okOverlay) {
+      await openOverlaySettings();
+      throw new Error('Hãy bật "Hiển thị trên ứng dụng khác" rồi bấm Bật lại.');
+    }
+    await syncAssistantData(
+      questions.map(({ id, quizSetId, question, correctIndex }) => ({ id, quizSetId, question, correctIndex })),
+      selectedSet,
+      autoMode,
+      clickDelayMs,
+    );
+    await startBubble();
+    setEnabled(true);
+    setBubbleRunning(true);
+  }, [questions, selectedSet, autoMode, clickDelayMs]);
+
+  const stopAssistant = useCallback(async () => {
+    if (isNativeCaptureAvailable()) {
+      try {
+        await stopBubble();
+      } catch {}
+    }
+    setEnabled(false);
+    setBubbleRunning(false);
+  }, []);
+
   const value: AppStoreValue = {
     ready,
     questions,
@@ -209,6 +278,10 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     exportJson,
     scan,
     scanFullText,
+    bubbleRunning,
+    refreshBubbleState,
+    startAssistant,
+    stopAssistant,
   };
 
   return <AppStoreCtx.Provider value={value}>{children}</AppStoreCtx.Provider>;

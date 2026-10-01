@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, Button, TextInput, StyleSheet, ScrollView } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, Button, TextInput, StyleSheet, ScrollView, Alert } from 'react-native';
 import { theme } from '../theme';
 import { useAppStore } from '../store/AppStore';
 import { captureAndOcr, isNativeCaptureAvailable } from '../services/realScan';
@@ -14,6 +14,12 @@ export function HomeScreen({ navigation }: any) {
   const [status, setStatus] = useState<AssistantStatus>('IDLE');
   const [result, setResult] = useState<string>('');
   const [scanning, setScanning] = useState(false);
+  const [toggling, setToggling] = useState(false);
+
+  useEffect(() => {
+    store.refreshBubbleState().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!store.ready) {
     return (
@@ -81,6 +87,26 @@ export function HomeScreen({ navigation }: any) {
   const statusColor =
     status === 'ANSWER_FOUND' ? theme.colors.success : status === 'NOT_FOUND' || status === 'ERROR' ? theme.colors.error : theme.colors.text;
 
+  const toggleAssistant = async () => {
+    if (toggling) return;
+    setToggling(true);
+    try {
+      if (store.bubbleRunning) {
+        await store.stopAssistant();
+        setStatus('IDLE');
+      } else {
+        await store.startAssistant();
+        setStatus('IDLE');
+        setResult('Bubble 🤖 đã hiện. Mở game rồi chạm bubble để quét.');
+      }
+    } catch (e: any) {
+      Alert.alert('Assistant', e?.message ?? 'Không bật được assistant.');
+      store.refreshBubbleState().catch(() => {});
+    } finally {
+      setToggling(false);
+    }
+  };
+
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.body}>
       <Text style={styles.title}>QuizAssistant</Text>
@@ -92,7 +118,18 @@ export function HomeScreen({ navigation }: any) {
         Đã lưu: {store.countCathay} Cathay · {store.countYamato} Yamato
       </Text>
       <Text style={{ color: statusColor }}>Trạng thái: {status}</Text>
-      <Button title={store.enabled ? 'TẮT ASSISTANT' : 'BẬT ASSISTANT'} onPress={() => store.setEnabled(!store.enabled)} />
+      {isNativeCaptureAvailable() ? (
+        <>
+          <Text>Bubble: {store.bubbleRunning ? '🤖 đang hiện' : 'ẩn'}</Text>
+          <Button
+            title={toggling ? 'ĐANG XỬ LÝ…' : store.bubbleRunning ? 'TẮT ASSISTANT (ẨN BUBBLE)' : 'BẬT ASSISTANT (HIỆN BUBBLE)'}
+            onPress={toggleAssistant}
+            disabled={toggling}
+          />
+        </>
+      ) : (
+        <Button title={store.enabled ? 'TẮT ASSISTANT' : 'BẬT ASSISTANT'} onPress={() => store.setEnabled(!store.enabled)} />
+      )}
       <View style={styles.gap} />
       <View style={styles.row}>
         <Button title="Cathay" onPress={() => store.setSelectedSet('cathay')} color={store.selectedSet === 'cathay' ? theme.colors.success : theme.colors.muted} />
