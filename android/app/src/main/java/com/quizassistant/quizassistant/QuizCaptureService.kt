@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
@@ -115,7 +116,7 @@ class QuizCaptureService : Service() {
         this,
         NOTIF_ID,
         notif,
-        androidx.content.pm.ServiceInfoCompat.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
       )
     } else {
       ServiceCompat.startForeground(this, NOTIF_ID, notif, 0)
@@ -141,7 +142,9 @@ class QuizCaptureService : Service() {
     if (w <= 0 || h <= 0) return ShotResult.Err("Invalid screen size ${w}x$h")
 
     val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-    val projection: MediaProjection = mpm.getMediaProjection(resultCode, data)
+    val projection: MediaProjection =
+      mpm.getMediaProjection(resultCode, data)
+        ?: return ShotResult.Err("Failed to obtain MediaProjection")
     var reader: ImageReader? = null
     var vd: VirtualDisplay? = null
     var image: Image? = null

@@ -65,7 +65,7 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun requestConsent(p: Promise) {
-    val activity = currentActivity
+    val activity = reactContext.currentActivity
     if (activity == null) {
       p.reject("E_NO_ACTIVITY", "No foreground activity")
       return
@@ -77,6 +77,7 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
     try {
       val mpm = reactContext.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
       consentPromise = p
+      @Suppress("DEPRECATION")
       activity.startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE_CONSENT)
     } catch (e: Exception) {
       consentPromise = null
@@ -84,7 +85,7 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  override fun onActivityResult(activity: Activity?, requestCode: Int, resultCode: Int, data: Intent?) {
+  override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
     if (requestCode != REQ_CAPTURE_CONSENT) return
     val p = consentPromise
     consentPromise = null
@@ -97,7 +98,7 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  override fun onNewIntent(intent: Intent?) {}
+  override fun onNewIntent(intent: Intent) {}
 
   @ReactMethod
   fun getScreenSize(p: Promise) {
