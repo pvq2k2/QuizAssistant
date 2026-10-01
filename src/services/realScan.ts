@@ -168,3 +168,9 @@ export async function isAccessibilityConnected(): Promise<boolean> {
   guardNative();
   return M.isAccessibilityConnected();
 }
+
+/** Đã cấp quyền chụp màn hình (MediaProjection consent) chưa. */
+export async function hasCaptureConsent(): Promise<boolean> {
+  guardNative();
+  return M.hasConsent();
+}

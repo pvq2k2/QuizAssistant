@@ -111,16 +111,27 @@ export function OcrRegionScreen() {
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ padding: 16 }}>
       <Text style={styles.title}>CẤU HÌNH VÙNG OCR</Text>
-      <Text style={styles.note}>1. Mở game → 2. Bấm "Chụp preview" → 3. Chọn khung → 4. Dùng nút dịch/chỉnh → 5. Lưu.</Text>
+      <Text style={styles.note}>1. Mở game → 2. Bấm "Chụp preview" → 3. Chọn khung → 4. Chạm vào ảnh để đặt vị trí (hoặc dùng nút) → 5. Lưu.</Text>
       <Button title={loading ? 'ĐANG CHỤP…' : shot ? 'Chụp preview lại' : 'Chụp preview'} onPress={snap} disabled={loading} />
       {loading ? <ActivityIndicator style={{ marginTop: 12 }} /> : null}
       {shot ? (
-        <View style={{ width: DW, height: DH, marginTop: 12, backgroundColor: '#000' }}>
+        <View
+          style={{ width: DW, height: DH, marginTop: 12, backgroundColor: '#000' }}
+          onTouchEnd={(e) => {
+            const { locationX, locationY } = e.nativeEvent;
+            const base = cur ?? { fx: 0, fy: 0, fw: 0.8, fh: 0.1 };
+            apply({
+              ...base,
+              fx: locationX / DW - base.fw / 2,
+              fy: locationY / DH - base.fh / 2,
+            });
+          }}
+        >
           <Image source={{ uri: 'file://' + shot.uri }} style={{ width: DW, height: DH }} resizeMode="stretch" />
-          {boxStyle(q, '#22c55e', target === 'q') ? <View style={boxStyle(q, '#22c55e', target === 'q')!} /> : null}
+          {boxStyle(q, '#22c55e', target === 'q') ? <View style={boxStyle(q, '#22c55e', target === 'q')!} pointerEvents="none" /> : null}
           {answers.map((a, i) => {
             const s = boxStyle(a, '#3b82f6', target === i);
-            return s ? <View key={i} style={s} /> : null;
+            return s ? <View key={i} style={s} pointerEvents="none" /> : null;
           })}
         </View>
       ) : null}

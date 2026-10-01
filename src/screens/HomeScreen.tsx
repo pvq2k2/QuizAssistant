@@ -2,7 +2,17 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, Button, TextInput, StyleSheet, ScrollView, Alert } from 'react-native';
 import { theme } from '../theme';
 import { useAppStore } from '../store/AppStore';
-import { captureAndOcr, isNativeCaptureAvailable } from '../services/realScan';
+import {
+  captureAndOcr,
+  isNativeCaptureAvailable,
+  canDrawOverlays,
+  hasCaptureConsent,
+  isAccessibilityConnected,
+  openOverlaySettings,
+  openAccessibilitySettings,
+  getQuestionRegion,
+  getAnswerRegions,
+} from '../services/realScan';
 import type { AssistantStatus } from '../models/types';
 
 // §22 Tab Trang chủ (§41): trạng thái + Bật/Tắt + Quét + bộ hiện tại + số câu.
@@ -135,6 +145,8 @@ export function HomeScreen({ navigation }: any) {
         <Button title="Cathay" onPress={() => store.setSelectedSet('cathay')} color={store.selectedSet === 'cathay' ? theme.colors.success : theme.colors.muted} />
         <Button title="Yamato" onPress={() => store.setSelectedSet('yamato')} color={store.selectedSet === 'yamato' ? theme.colors.success : theme.colors.muted} />
       </View>
+      {isNativeCaptureAvailable() ? <PermissionCenter /> : null}
+      {isNativeCaptureAvailable() ? <RegionStatus navigation={navigation} /> : null}
       <Text style={styles.h}>🔍 Quét câu hỏi (nhập text OCR)</Text>
       <TextInput style={styles.input} value={ocrText} onChangeText={setOcrText} placeholder="Dán text OCR ở đây…" multiline />
       <Button title={scanning ? 'ĐANG QUÉT…' : 'QUÉT'} onPress={scan} disabled={scanning} />
@@ -165,4 +177,89 @@ const styles = StyleSheet.create({
   input: { borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, padding: 8, minHeight: 70 },
   result: { marginTop: 8, fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   hint: { color: theme.colors.muted, fontSize: 12 },
+  permRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 },
 });
+
+// §22: trạng thái các quyền cần thiết + nút cấp ngay tại Home.
+function PermissionCenter() {
+  const [st, setSt] = useState<{ overlay: boolean | null; shot: boolean | null; a11y: boolean | null }>({
+    overlay: null,
+    shot: null,
+    a11y: null,
+  });
+
+  const refresh = React.useCallback(async () => {
+    try {
+      const [overlay, shot, a11y] = await Promise.all([
+        canDrawOverlays(),
+        hasCaptureConsent(),
+        isAccessibilityConnected(),
+      ]);
+      setSt({ overlay, shot, a11y });
+    } catch {
+      setSt({ overlay: false, shot: false, a11y: false });
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh().catch(() => {});
+  }, [refresh]);
+
+  const dot = (v: boolean | null) => (v === null ? '…' : v ? '✓' : '✗');
+  const dotColor = (v: boolean | null) => (v ? theme.colors.success : v === null ? theme.colors.muted : theme.colors.error);
+
+  return (
+    <View>
+      <View style={styles.row}>
+        <Text style={styles.h}>Trạng thái quyền</Text>
+        <Text onPress={refresh} style={{ marginTop: 12, color: theme.colors.success }}>
+          ↻ Kiểm tra lại
+        </Text>
+      </View>
+      <View style={styles.permRow}>
+        <Text style={{ color: dotColor(st.overlay) }}>{dot(st.overlay)} Overlay (bubble)</Text>
+        {st.overlay === false ? <Button title="Cấp" onPress={() => openOverlaySettings()} /> : null}
+      </View>
+      <View style={styles.permRow}>
+        <Text style={{ color: dotColor(st.shot) }}>{dot(st.shot)} Chụp màn hình</Text>
+        <Text style={styles.hint}>cấp khi bấm Quét/Bật</Text>
+      </View>
+      <View style={styles.permRow}>
+        <Text>✓ OCR (ML Kit on-device)</Text>
+      </View>
+      <View style={styles.permRow}>
+        <Text style={{ color: dotColor(st.a11y) }}>{dot(st.a11y)} Accessibility (auto-click)</Text>
+        {st.a11y === false ? <Button title="Cấp" onPress={() => openAccessibilitySettings()} /> : null}
+      </View>
+    </View>
+  );
+}
+
+// Vùng đọc đã cấu hình chưa — nhắc cấu hình trước khi bật bubble.
+function RegionStatus({ navigation }: any) {
+  const [info, setInfo] = useState<string>('…');
+
+  const refresh = React.useCallback(async () => {
+    try {
+      const q = await getQuestionRegion();
+      const arr = await getAnswerRegions();
+      const n = arr.filter(Boolean).length;
+      setInfo(q ? `Vùng câu hỏi ✓ · Vùng đáp án ${n}/4` : `Vùng câu hỏi ✗ · Vùng đáp án ${n}/4`);
+    } catch {
+      setInfo('Không đọc được cấu hình');
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh().catch(() => {});
+    const t = setInterval(refresh, 3000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  return (
+    <View style={styles.permRow}>
+      <Text>{info}</Text>
+      <Button title="Cấu hình" onPress={() => navigation.navigate('Settings', { screen: 'OcrRegion' })} />
+    </View>
+  );
+}
