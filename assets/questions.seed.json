@@ -1,0 +1,5 @@
+[
+  { "id": "cathay-001", "quizSetId": "cathay", "question": "Ẩm thực Tứ Xuyên nổi tiếng với", "correctIndex": 2 },
+  { "id": "cathay-002", "quizSetId": "cathay", "question": "Thủ đô của Việt Nam là", "correctIndex": 0 },
+  { "id": "yamato-001", "quizSetId": "yamato", "question": "Câu hỏi Yamato mẫu", "correctIndex": 1 }
+]

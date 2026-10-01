@@ -1,0 +1,86 @@
+# Node / npm / yarn
+node_modules/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.pnpm-store/
+.yarn/
+
+# Expo
+.expo/
+dist/
+web-build/
+.expo-shared/
+expo-env.d.ts
+
+# Build outputs
+build/
+out/
+
+# React Native / Metro
+.metro-health-check*
+*.jsbundle
+*.map
+
+# Android (Expo prebuild)
+android/build/
+android/app/build/
+android/app/debug/
+android/app/release/
+android/.gradle/
+android/local.properties
+android/*.iml
+android/.idea/
+android/.cxx/
+android/app/src/main/java/inline/
+*.hprof
+*.keystore
+*.jks
+
+# iOS (dự phòng nếu prebuild iOS sau này)
+ios/build/
+ios/Pods/
+ios/*.xcworkspace
+ios/*.xcuserdata
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+xcuserdata/
+*.xccheckout
+*.moved-aside
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# TypeScript / test
+*.tsbuildinfo
+coverage/
+.nyc_output/
+
+# Env & secrets — KHÔNG commit key thật
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.p12
+google-services.json
+GoogleService-Info.plist
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# Logs & temp
+logs/
+*.log
+tmp/
+temp/
