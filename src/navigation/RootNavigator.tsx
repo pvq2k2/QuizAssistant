@@ -7,6 +7,7 @@ import { QuestionsScreen } from '../screens/QuestionsScreen';
 import { QuestionEditScreen } from '../screens/QuestionEditScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { OcrRegionScreen } from '../screens/OcrRegionScreen';
+import { navigationRef } from './navigationRef';
 
 // §29: Root → BottomTab(3 tabs) → Stacks. Screens phụ không lên bottom tab.
 const Tab = createBottomTabNavigator();
@@ -42,7 +43,7 @@ function SettingsStackNav() {
 
 export function RootNavigator() {
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <Tab.Navigator screenOptions={{ headerShown: false }}>
         <Tab.Screen name="Home" component={HomeStackNav} options={{ title: 'Trang chủ' }} />
         <Tab.Screen name="Questions" component={QuestionsStackNav} options={{ title: 'Câu hỏi' }} />

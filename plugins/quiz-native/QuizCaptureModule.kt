@@ -441,4 +441,25 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
   fun isAccessibilityConnected(p: Promise) {
     p.resolve(QuizClickService.isConnected)
   }
+
+  /**
+   * Tab mà bubble yêu cầu mở ("Questions" / "Settings" / null).
+   * Đọc từ intent của activity hiện tại rồi xóa để chỉ tiêu thụ một lần.
+   */
+  @ReactMethod
+  fun getLaunchTab(p: Promise) {
+    try {
+      val activity = reactApplicationContext.currentActivity
+      val tab = activity?.intent?.getStringExtra("quiz_tab")
+      if (tab != null) {
+        try {
+          activity.intent.removeExtra("quiz_tab")
+        } catch (_: Exception) {
+        }
+      }
+      p.resolve(tab)
+    } catch (e: Exception) {
+      p.reject("E_TAB", e.message)
+    }
+  }
 }

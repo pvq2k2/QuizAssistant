@@ -4,6 +4,7 @@ import { theme } from '../theme';
 import {
   isNativeCaptureAvailable,
   capturePreview,
+  getLastShot,
   getQuestionRegion,
   setQuestionRegion,
   getAnswerRegions,
@@ -34,6 +35,10 @@ export function OcrRegionScreen() {
         const rq = await getQuestionRegion();
         if (rq) setQ(rq);
         setAnswers(await getAnswerRegions());
+        // Bubble "🎯 Vùng đọc" chụp nền game trước rồi mở màn này:
+        // tự nạp ảnh đó làm nền, khỏi bấm "Chụp preview".
+        const last = await getLastShot().catch(() => null);
+        if (last) setShot(last);
       } catch {}
     })();
   }, []);
@@ -111,7 +116,7 @@ export function OcrRegionScreen() {
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ padding: 16 }}>
       <Text style={styles.title}>CẤU HÌNH VÙNG OCR</Text>
-      <Text style={styles.note}>1. Mở game → 2. Bấm "Chụp preview" → 3. Chọn khung → 4. Chạm vào ảnh để đặt vị trí (hoặc dùng nút) → 5. Lưu.</Text>
+      <Text style={styles.note}>Cách nhanh: mở game → chạm bubble 🤖 → "🎯 Vùng đọc" (tự chụp nền game rồi mở màn này). Hoặc bấm "Chụp preview" dưới đây khi app đang mở.</Text>
       <Button title={loading ? 'ĐANG CHỤP…' : shot ? 'Chụp preview lại' : 'Chụp preview'} onPress={snap} disabled={loading} />
       {loading ? <ActivityIndicator style={{ marginTop: 12 }} /> : null}
       {shot ? (

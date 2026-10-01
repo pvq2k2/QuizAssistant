@@ -196,16 +196,18 @@ class FloatingBubbleService : Service() {
       }
     }
     val openBtn = pill("📱 Mở app").apply {
-      setOnClickListener {
-        try {
-          val launch = packageManager.getLaunchIntentForPackage(packageName)
-          launch?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-          startActivity(launch)
-        } catch (_: Exception) {
-        }
-      }
+      setOnClickListener { openAppTab(null) }
     }
-    val closeBtn = pill("✕").apply { setOnClickListener { togglePanel(false) } }
+    val questionsBtn = pill("📚 Câu hỏi").apply {
+      setOnClickListener { openAppTab("Questions") }
+    }
+    val settingsBtn = pill("⚙ Cài đặt").apply {
+      setOnClickListener { openAppTab("Settings") }
+    }
+    val regionBtn = pill("🎯 Vùng đọc").apply {
+      setOnClickListener { snapBackgroundForRegionConfig() }
+    }
+    val closeBtn = pill("✕ Đóng").apply { setOnClickListener { togglePanel(false) } }
 
     panel = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
@@ -221,6 +223,9 @@ class FloatingBubbleService : Service() {
       addView(autoBtn)
       addView(setBtn)
       addView(openBtn)
+      addView(questionsBtn)
+      addView(settingsBtn)
+      addView(regionBtn)
       addView(closeBtn)
     }
     panelParams = WindowManager.LayoutParams(
@@ -236,8 +241,43 @@ class FloatingBubbleService : Service() {
     }
   }
 
-  private fun togglePanel(show: Boolean) {
-    panelVisible = show
+  /** Mở app, kèm tab đích để JS tự điều hướng (tab = null → giữ nguyên). */
+  private fun openAppTab(tab: String?) {
+    try {
+      val launch = packageManager.getLaunchIntentForPackage(packageName)
+      if (tab != null) launch?.putExtra("quiz_tab", tab)
+      launch?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      startActivity(launch)
+    } catch (_: Exception) {
+    }
+  }
+
+  /**
+   * Cấu hình vùng đọc ngay khi game đang chạy: chụp toàn màn hình hiện tại
+   * làm nền, lưu cho editor, rồi mở màn hình editor trong app.
+   */
+  private fun snapBackgroundForRegionConfig() {
+    if (scanning) return
+    scanning = true
+    setResult("Đang chụp nền…")
+    Thread {
+      try {
+        val shot = QuizShot.captureSync(
+          this, QuizCaptureModule.consentResultCode, QuizCaptureModule.consentData, null,
+        )
+        QuizCaptureModule.lastShotPath = shot.path
+        QuizCaptureModule.lastShotWidth = shot.width
+        QuizCaptureModule.lastShotHeight = shot.height
+        main.post { openAppTab("Region") }
+      } catch (e: Exception) {
+        setResult("Lỗi chụp: ${e.message}")
+      } finally {
+        scanning = false
+      }
+    }.start()
+  }
+
+  private fun togglePanel(show: Boolean) {    panelVisible = show
     try {
       if (show) {
         if (panel?.parent == null) wm?.addView(panel, panelParams)

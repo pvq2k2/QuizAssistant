@@ -20,7 +20,12 @@ class QuizCapturePackage : BaseReactPackage() {
           false,
           false,
           false,
-          true,
+          // QUAN TRỌNG: QuizCaptureModule là legacy module (extends
+          // ReactContextBaseJavaModule, KHÔNG implement TurboModule) nên
+          // isTurboModule PHẢI là false. Nếu để true, cả 2 đường lookup đều
+          // trả null (legacy skip vì cờ turbo; turbo cast thất bại) và JS
+          // thấy NativeModules.QuizCapture === undefined.
+          ReactModuleInfo.classIsTurboModule(QuizCaptureModule::class.java),
         ),
       )
     }

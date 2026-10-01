@@ -1,12 +1,47 @@
 // realScan.ts — cầu nối JS ↔ native QuizCaptureModule (dev-build Android).
 // Expo Go: isNativeCaptureAvailable() === false → UI ẩn nút quét thật.
 
-import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import { NativeModules, PermissionsAndroid, Platform, TurboModuleRegistry } from 'react-native';
 
-const M: any = (NativeModules as any)?.QuizCapture;
+// Lấy module native qua cả 2 đường (legacy proxy + turbo registry) để không
+// lỗi câm nếu RN đổi cơ chế lookup trong bản nâng cấp sau.
+function resolveNativeModule(): any {
+  const viaLegacy = (NativeModules as any)?.QuizCapture;
+  if (viaLegacy) return viaLegacy;
+  try {
+    return (TurboModuleRegistry as any)?.get?.('QuizCapture') ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const M: any = resolveNativeModule();
 
 export const isNativeCaptureAvailable = (): boolean =>
   Platform.OS === 'android' && !!M;
+
+/** Method native có tồn tại không — phát hiện APK cũ thiếu tính năng mới. */
+export function hasNativeMethod(name: string): boolean {
+  return isNativeCaptureAvailable() && typeof M[name] === 'function';
+}
+
+/** Yêu cầu các method tối thiểu của bản full; báo rõ nếu APK quá cũ. */
+function requireMethods(names: string[]): void {
+  if (!isNativeCaptureAvailable()) {
+    throw new Error('Chức năng này chỉ chạy trên dev-build Android (không chạy trên Expo Go).');
+  }
+  const missing = names.filter((n) => typeof M[n] !== 'function');
+  if (missing.length > 0) {
+    throw new Error(
+      `APK trên máy thiếu: ${missing.join(', ')}. Hãy cài bản APK mới nhất rồi thử lại.`,
+    );
+  }
+}
+
+export async function getLaunchTab(): Promise<string | null> {
+  if (!hasNativeMethod('getLaunchTab')) return null;
+  return M.getLaunchTab();
+}
 
 export interface PixelRegion {
   x: number;
@@ -24,18 +59,30 @@ export interface CaptureOcrResult {
 
 async function ensureCaptureReady(): Promise<void> {
   if (Platform.OS === 'android' && Platform.Version >= 33) {
-    try {
-      await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-      );
-    } catch {
-      // Không chặn flow nếu xin quyền notification thất bại.
-    }
+    await requestPostNotifications().catch(() => false);
   }
+  const ok = await requestCaptureConsent();
+  if (!ok) throw new Error('Bạn đã từ chối quyền chụp màn hình.');
+}
+
+/** Xin quyền chụp màn hình (hiện dialog hệ thống). Trả true nếu đã được cấp. */
+export async function requestCaptureConsent(): Promise<boolean> {
+  requireMethods(['hasConsent', 'requestConsent']);
   const has: boolean = await M.hasConsent();
-  if (!has) {
-    const granted: boolean = await M.requestConsent();
-    if (!granted) throw new Error('Bạn đã từ chối quyền chụp màn hình.');
+  if (has) return true;
+  return M.requestConsent();
+}
+
+/** Xin quyền hiện thông báo (cần cho foreground service Android 13+). */
+export async function requestPostNotifications(): Promise<boolean> {
+  if (Platform.OS !== 'android' || Platform.Version < 33) return true;
+  try {
+    const r = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+    );
+    return r === PermissionsAndroid.RESULTS.GRANTED;
+  } catch {
+    return false;
   }
 }
 
@@ -145,17 +192,17 @@ export async function openOverlaySettings(): Promise<void> {
 }
 
 export async function startBubble(): Promise<void> {
-  guardNative();
+  requireMethods(['startBubble']);
   await M.startBubble();
 }
 
 export async function stopBubble(): Promise<void> {
-  guardNative();
+  requireMethods(['stopBubble']);
   await M.stopBubble();
 }
 
 export async function isBubbleRunning(): Promise<boolean> {
-  guardNative();
+  requireMethods(['isBubbleRunning']);
   return M.isBubbleRunning();
 }
 

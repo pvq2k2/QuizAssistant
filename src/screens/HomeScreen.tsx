@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Button, TextInput, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, Text, Button, TextInput, StyleSheet, ScrollView, Alert, AppState } from 'react-native';
 import { theme } from '../theme';
 import { useAppStore } from '../store/AppStore';
 import {
   captureAndOcr,
   isNativeCaptureAvailable,
+  hasNativeMethod,
   canDrawOverlays,
   hasCaptureConsent,
+  requestCaptureConsent,
   isAccessibilityConnected,
   openOverlaySettings,
   openAccessibilitySettings,
@@ -145,8 +147,8 @@ export function HomeScreen({ navigation }: any) {
         <Button title="Cathay" onPress={() => store.setSelectedSet('cathay')} color={store.selectedSet === 'cathay' ? theme.colors.success : theme.colors.muted} />
         <Button title="Yamato" onPress={() => store.setSelectedSet('yamato')} color={store.selectedSet === 'yamato' ? theme.colors.success : theme.colors.muted} />
       </View>
-      {isNativeCaptureAvailable() ? <PermissionCenter /> : null}
-      {isNativeCaptureAvailable() ? <RegionStatus navigation={navigation} /> : null}
+      {isNativeCaptureAvailable() ? <PermissionCenter /> : <GoInstallNote />}
+      <RegionStatus navigation={navigation} />
       <Text style={styles.h}>🔍 Quét câu hỏi (nhập text OCR)</Text>
       <TextInput style={styles.input} value={ocrText} onChangeText={setOcrText} placeholder="Dán text OCR ở đây…" multiline />
       <Button title={scanning ? 'ĐANG QUÉT…' : 'QUÉT'} onPress={scan} disabled={scanning} />
@@ -180,13 +182,16 @@ const styles = StyleSheet.create({
   permRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 },
 });
 
-// §22: trạng thái các quyền cần thiết + nút cấp ngay tại Home.
+// §22: trạng thái các quyền cần thiết + nút xin từng quyền ngay tại Home.
+// Luôn hiển thị (kể cả khi native thiếu) để user biết vì sao chưa chạy được.
 function PermissionCenter() {
-  const [st, setSt] = useState<{ overlay: boolean | null; shot: boolean | null; a11y: boolean | null }>({
-    overlay: null,
-    shot: null,
-    a11y: null,
-  });
+  const [st, setSt] = useState<{
+    overlay: boolean | null;
+    shot: boolean | null;
+    notif: boolean | null;
+    a11y: boolean | null;
+  }>({ overlay: null, shot: null, notif: null, a11y: null });
+  const [busy, setBusy] = useState<string | null>(null);
 
   const refresh = React.useCallback(async () => {
     try {
@@ -195,18 +200,35 @@ function PermissionCenter() {
         hasCaptureConsent(),
         isAccessibilityConnected(),
       ]);
-      setSt({ overlay, shot, a11y });
+      setSt((s) => ({ ...s, overlay, shot, a11y }));
     } catch {
-      setSt({ overlay: false, shot: false, a11y: false });
+      setSt((s) => ({ ...s, overlay: false, shot: false, a11y: false }));
     }
   }, []);
 
   useEffect(() => {
     refresh().catch(() => {});
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') refresh().catch(() => {});
+    });
+    return () => sub.remove();
   }, [refresh]);
 
+  const ask = async (key: string, fn: () => Promise<any>) => {
+    setBusy(key);
+    try {
+      await fn();
+    } catch (e: any) {
+      Alert.alert('Quyền', e?.message ?? 'Không xin được quyền.');
+    } finally {
+      setBusy(null);
+      refresh().catch(() => {});
+    }
+  };
+
   const dot = (v: boolean | null) => (v === null ? '…' : v ? '✓' : '✗');
-  const dotColor = (v: boolean | null) => (v ? theme.colors.success : v === null ? theme.colors.muted : theme.colors.error);
+  const dotColor = (v: boolean | null) =>
+    v ? theme.colors.success : v === null ? theme.colors.muted : theme.colors.error;
 
   return (
     <View>
@@ -216,21 +238,70 @@ function PermissionCenter() {
           ↻ Kiểm tra lại
         </Text>
       </View>
+      <NativeCapsRow />
       <View style={styles.permRow}>
-        <Text style={{ color: dotColor(st.overlay) }}>{dot(st.overlay)} Overlay (bubble)</Text>
-        {st.overlay === false ? <Button title="Cấp" onPress={() => openOverlaySettings()} /> : null}
+        <Text style={{ color: dotColor(st.overlay) }}>{dot(st.overlay)} Overlay (hiện bubble)</Text>
+        <Button
+          title={busy === 'overlay' ? '…' : st.overlay ? 'Mở cài đặt' : 'Xin quyền'}
+          onPress={() => ask('overlay', openOverlaySettings)}
+          disabled={busy !== null}
+        />
+      </View>
+      <Text style={styles.hint}>Overlay phải bật thủ công trong màn hình hệ thống vừa mở.</Text>
+      <View style={styles.permRow}>
+        <Text style={{ color: dotColor(st.shot) }}>{dot(st.shot)} Chụp màn hình game</Text>
+        <Button
+          title={busy === 'shot' ? '…' : 'Xin quyền'}
+          onPress={() =>
+            ask('shot', async () => {
+              const ok = await requestCaptureConsent();
+              if (!ok) throw new Error('Bạn đã từ chối quyền chụp màn hình.');
+            })
+          }
+          disabled={busy !== null}
+        />
       </View>
       <View style={styles.permRow}>
-        <Text style={{ color: dotColor(st.shot) }}>{dot(st.shot)} Chụp màn hình</Text>
-        <Text style={styles.hint}>cấp khi bấm Quét/Bật</Text>
+        <Text>✓ OCR (ML Kit trong máy)</Text>
       </View>
       <View style={styles.permRow}>
-        <Text>✓ OCR (ML Kit on-device)</Text>
+        <Text style={{ color: dotColor(st.a11y) }}>{dot(st.a11y)} Accessibility (tự chạm)</Text>
+        <Button
+          title={busy === 'a11y' ? '…' : st.a11y ? 'Mở cài đặt' : 'Xin quyền'}
+          onPress={() => ask('a11y', openAccessibilitySettings)}
+          disabled={busy !== null}
+        />
       </View>
-      <View style={styles.permRow}>
-        <Text style={{ color: dotColor(st.a11y) }}>{dot(st.a11y)} Accessibility (auto-click)</Text>
-        {st.a11y === false ? <Button title="Cấp" onPress={() => openAccessibilitySettings()} /> : null}
-      </View>
+      <Text style={styles.hint}>Accessibility cũng phải gạt bật thủ công trong màn hình hệ thống.</Text>
+    </View>
+  );
+}
+
+// Hiện khi chạy bản thiếu native (Expo Go / APK cũ): giải thích + hướng cài.
+function GoInstallNote() {
+  return (
+    <View>
+      <Text style={styles.h}>Trạng thái quyền</Text>
+      <NativeCapsRow />
+      <Text style={styles.hint}>
+        Bạn đang chạy bản thiếu native (Expo Go hoặc APK cũ) nên chưa xin quyền / hiện bubble được. Hãy cài file
+        app-release.apk mới nhất rồi mở lại app này.
+      </Text>
+    </View>
+  );
+}
+
+// Phát hiện APK cũ (thiếu method bubble mới) để báo user cài bản mới.
+function NativeCapsRow() {
+  const ok =
+    hasNativeMethod('startBubble') &&
+    hasNativeMethod('assistantScan') &&
+    hasNativeMethod('getLaunchTab');
+  return (
+    <View style={styles.permRow}>
+      <Text style={{ color: ok ? theme.colors.success : theme.colors.error }}>
+        {ok ? '✓ Native bubble (APK mới)' : '✗ Native bubble thiếu — hãy cài APK mới nhất'}
+      </Text>
     </View>
   );
 }
@@ -240,6 +311,10 @@ function RegionStatus({ navigation }: any) {
   const [info, setInfo] = useState<string>('…');
 
   const refresh = React.useCallback(async () => {
+    if (!isNativeCaptureAvailable()) {
+      setInfo('Cần bản APK mới để cấu hình vùng đọc');
+      return;
+    }
     try {
       const q = await getQuestionRegion();
       const arr = await getAnswerRegions();
@@ -259,7 +334,11 @@ function RegionStatus({ navigation }: any) {
   return (
     <View style={styles.permRow}>
       <Text>{info}</Text>
-      <Button title="Cấu hình" onPress={() => navigation.navigate('Settings', { screen: 'OcrRegion' })} />
+      <Button
+        title="Cấu hình"
+        disabled={!isNativeCaptureAvailable()}
+        onPress={() => navigation.navigate('Settings', { screen: 'OcrRegion' })}
+      />
     </View>
   );
 }
