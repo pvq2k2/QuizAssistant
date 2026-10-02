@@ -257,10 +257,20 @@ class FloatingBubbleService : Service() {
    * làm nền, lưu cho editor, rồi mở màn hình editor trong app.
    */
   private fun snapBackgroundForRegionConfig() {
-    if (scanning) return
+    if (scanning) {
+      setResult("Đang chụp, đợi xong rồi bấm lại.")
+      return
+    }
     scanning = true
     setResult("Đang chụp nền…")
     Thread {
+      // Giấu overlay để ảnh nền sạch rồi mới chụp.
+      hideOverlayForCleanShot(true)
+      try {
+        Thread.sleep(450)
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+      }
       try {
         val shot = QuizShot.captureSync(
           this, QuizCaptureModule.consentResultCode, QuizCaptureModule.consentData, null,
@@ -269,12 +279,30 @@ class FloatingBubbleService : Service() {
         QuizCaptureModule.lastShotWidth = shot.width
         QuizCaptureModule.lastShotHeight = shot.height
         main.post { openAppTab("Region") }
-      } catch (e: Exception) {
-        setResult("Lỗi chụp: ${e.message}")
+      } catch (t: Throwable) {
+        QuizTrace.error("bubble/snap", t)
+        setResult("Lỗi chụp: ${friendlyCaptureError(t)}")
       } finally {
+        hideOverlayForCleanShot(false)
         scanning = false
       }
     }.start()
+  }
+
+  /** Biến lỗi kỹ thuật thành câu dễ hiểu + gợi ý thao tác tiếp theo. */
+  private fun friendlyCaptureError(t: Throwable): String {
+    return when (t) {
+      is QuizShot.BusyException -> "Đang có lần chụp khác chạy, đợi vài giây rồi bấm lại."
+      is QuizShot.ConsentStaleException -> "Quyền chụp đã hết hiệu lực. Mở app → Trang chủ → bấm Quét để cấp lại."
+      else -> {
+        val m = t.message ?: t.toString()
+        if (m.contains("timed out", ignoreCase = true)) {
+          "Chụp quá 20s không xong. Thử bấm lại 1 lần; nếu vẫn vậy hãy tắt/mở lại bubble."
+        } else {
+          m
+        }
+      }
+    }
   }
 
   private fun togglePanel(show: Boolean) {    panelVisible = show
@@ -349,13 +377,48 @@ class FloatingBubbleService : Service() {
     }
   }
 
+  /**
+   * Giấu bubble+panel để ảnh chụp không dính menu (chỉ cho lần chụp thủ công;
+   * Auto Mode giữ nguyên để khỏi nhấp nháy). Gọi từ worker thread.
+   */
+  private fun hideOverlayForCleanShot(hide: Boolean) {
+    val latch = java.util.concurrent.CountDownLatch(1)
+    main.post {
+      try {
+        val v = if (hide) View.INVISIBLE else View.VISIBLE
+        bubble?.visibility = v
+        panel?.visibility = v
+      } catch (_: Exception) {
+      } finally {
+        latch.countDown()
+      }
+    }
+    try {
+      latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+    } catch (_: Exception) {
+    }
+  }
+
   private fun doScan(auto: Boolean) {
-    if (scanning) return
+    if (scanning) {
+      if (!auto) setResult("Đang quét, đợi xong rồi bấm lại.")
+      return
+    }
     scanning = true
     if (!auto) setResult("Đang quét…")
     Thread {
+      // Chụp thủ công thì giấu overlay để ảnh sạch (auto giữ nguyên).
+      val hideForShot = !auto
       try {
         val prefs = QuizPrefs(this)
+        if (hideForShot) {
+          hideOverlayForCleanShot(true)
+          try {
+            Thread.sleep(450)
+          } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+          }
+        }
         val shot = QuizShot.captureSync(
           this, QuizCaptureModule.consentResultCode, QuizCaptureModule.consentData, null,
         )
@@ -387,9 +450,11 @@ class FloatingBubbleService : Service() {
             setResult(if (text.isBlank()) "OCR trống" else "Không tìm thấy")
           }
         }
-      } catch (e: Exception) {
-        if (!auto) setResult("Lỗi: ${e.message}")
+      } catch (t: Throwable) {
+        QuizTrace.error("bubble/doScan", t)
+        if (!auto) setResult("Lỗi: ${friendlyCaptureError(t)}")
       } finally {
+        if (hideForShot) hideOverlayForCleanShot(false)
         scanning = false
       }
     }.start()

@@ -65,6 +65,20 @@ async function ensureCaptureReady(): Promise<void> {
   if (!ok) throw new Error('Bạn đã từ chối quyền chụp màn hình.');
 }
 
+/** Chạy fn, nếu consent cũ thì xin lại 1 lần rồi thử lại đúng 1 lần. */
+async function withConsentRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e: any) {
+    const code = e?.code;
+    if (code !== 'E_CONSENT_STALE') throw e;
+    await M.clearConsent().catch(() => {});
+    const ok = await requestCaptureConsent();
+    if (!ok) throw new Error('Quyền chụp màn hình đã hết hiệu lực và bạn đã từ chối cấp lại.');
+    return fn();
+  }
+}
+
 /** Xin quyền chụp màn hình (hiện dialog hệ thống). Trả true nếu đã được cấp. */
 export async function requestCaptureConsent(): Promise<boolean> {
   requireMethods(['hasConsent', 'requestConsent']);
@@ -92,8 +106,10 @@ export async function captureAndOcr(region?: PixelRegion): Promise<CaptureOcrRes
     throw new Error('Chụp màn hình thật chỉ chạy trên dev-build Android.');
   }
   await ensureCaptureReady();
-  const r = await M.captureAndOcr(region ? JSON.stringify(region) : null);
-  return { uri: r.uri, width: r.width, height: r.height, text: r.text ?? '' };
+  return withConsentRetry(async () => {
+    const r = await M.captureAndOcr(region ? JSON.stringify(region) : null);
+    return { uri: r.uri, width: r.width, height: r.height, text: r.text ?? '' };
+  });
 }
 
 export interface FractionRegion {
@@ -125,16 +141,18 @@ function guardNative(): void {
 export async function assistantScan(): Promise<AssistantScanResult> {
   guardNative();
   await ensureCaptureReady();
-  const r = await M.assistantScan();
-  return {
-    uri: r.uri,
-    width: r.width,
-    height: r.height,
-    text: r.text ?? '',
-    normalized: r.normalized ?? '',
-    matched: !!r.matched,
-    correctIndex: r.correctIndex ?? null,
-  };
+  return withConsentRetry(async () => {
+    const r = await M.assistantScan();
+    return {
+      uri: r.uri,
+      width: r.width,
+      height: r.height,
+      text: r.text ?? '',
+      normalized: r.normalized ?? '',
+      matched: !!r.matched,
+      correctIndex: r.correctIndex ?? null,
+    };
+  });
 }
 
 /** Đẩy toàn bộ DB + settings sang native để bubble chạy độc lập. */
@@ -220,4 +238,21 @@ export async function isAccessibilityConnected(): Promise<boolean> {
 export async function hasCaptureConsent(): Promise<boolean> {
   guardNative();
   return M.hasConsent();
+}
+
+/** Đọc hộp đen trace lần chụp gần nhất (chẩn đoán không cần adb). */
+export async function getCaptureTrace(): Promise<string> {
+  if (!hasNativeMethod('getCaptureTrace')) return '';
+  try {
+    return (await M.getCaptureTrace()) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export async function clearCaptureTrace(): Promise<void> {
+  if (!hasNativeMethod('clearCaptureTrace')) return;
+  try {
+    await M.clearCaptureTrace();
+  } catch {}
 }

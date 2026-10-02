@@ -15,7 +15,9 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
@@ -36,8 +38,8 @@ import java.util.concurrent.atomic.AtomicReference
 class QuizCaptureService : Service() {
 
   sealed interface ShotResult {
-    data class Ok(val path: String, val width: Int, val height: Int) : ShotResult
-    data class Err(val message: String) : ShotResult
+    data class Ok(val path: String, val width: Int, val height: Int, val seq: Int) : ShotResult
+    data class Err(val message: String, val seq: Int, val staleConsent: Boolean = false) : ShotResult
   }
 
   companion object {
@@ -58,37 +60,75 @@ class QuizCaptureService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent?.action != ACTION_CAPTURE) {
-      stopSelf(startId)
+    // Không bao giờ để exception thoát ra main thread (văng app).
+    // Mọi thất bại đều chuyển thành Err + đếm latch để bên gọi nhận lỗi gọn.
+    try {
+      if (intent?.action != ACTION_CAPTURE) {
+        stopSelf(startId)
+        return START_NOT_STICKY
+      }
+      startForegroundInternal()
+      val seq = intent.getIntExtra(QuizShot.EXTRA_SEQ, -1)
+      val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
+      val data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
+        intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
+      } else {
+        @Suppress("DEPRECATION")
+        intent.getParcelableExtra(EXTRA_DATA)
+      }
+      val region = intent.getIntArrayExtra(EXTRA_REGION)
+      Thread {
+        try {
+          postIfCurrent(seq, doCapture(resultCode, data, region, seq))
+        } catch (t: Throwable) {
+          postIfCurrent(seq, ShotResult.Err(t.message ?: t.toString(), seq))
+        } finally {
+          try {
+            pendingLatch?.countDown()
+          } catch (_: Exception) {
+          }
+          try {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+          } catch (_: Exception) {
+          }
+          stopSelf(startId)
+        }
+      }.start()
+      return START_NOT_STICKY
+    } catch (t: Throwable) {
+      try {
+        pendingResult.set(
+          ShotResult.Err("Service start failed: ${t.message ?: t.toString()}", -1),
+        )
+      } catch (_: Exception) {
+      }
+      try {
+        pendingLatch?.countDown()
+      } catch (_: Exception) {
+      }
+      try {
+        stopSelf(startId)
+      } catch (_: Exception) {
+      }
       return START_NOT_STICKY
     }
-    startForegroundInternal()
-    val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
-    val data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
-      intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
-    } else {
-      @Suppress("DEPRECATION")
-      intent.getParcelableExtra(EXTRA_DATA)
+  }
+
+  /** Chỉ post kết quả khi seq còn là lần chụp hiện tại (bỏ kết quả mồ côi). */
+  private fun postIfCurrent(seq: Int, r: ShotResult) {
+    try {
+      if (seq == QuizShot.currentSeq) pendingResult.set(r)
+    } catch (_: Exception) {
     }
-    val region = intent.getIntArrayExtra(EXTRA_REGION)
-    Thread {
-      try {
-        pendingResult.set(doCapture(resultCode, data, region))
-      } catch (e: Exception) {
-        pendingResult.set(ShotResult.Err(e.message ?: e.toString()))
-      } finally {
-        try {
-          pendingLatch?.countDown()
-        } catch (_: Exception) {
-        }
-        try {
-          ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        } catch (_: Exception) {
-        }
-        stopSelf(startId)
-      }
-    }.start()
-    return START_NOT_STICKY
+  }
+
+  /** Nhận diện lỗi do consent cũ/hết hiệu lực để JS xin lại thay vì báo lỗi chung. */
+  private fun isConsentError(t: Throwable): Boolean {
+    if (t is SecurityException) return true
+    val msg = (t.message ?: "").lowercase()
+    return listOf("token", "permission", "revoked", "stale", "denied", "not allowed", "invalid").any {
+      msg.contains(it)
+    }
   }
 
   private fun startForegroundInternal() {
@@ -135,29 +175,59 @@ class QuizCaptureService : Service() {
     }
   }
 
-  private fun doCapture(resultCode: Int, data: Intent?, region: IntArray?): ShotResult {
-    if (data == null) return ShotResult.Err("Missing MediaProjection consent data")
+  private fun doCapture(resultCode: Int, data: Intent?, region: IntArray?, seq: Int): ShotResult {
+    fun err(msg: String, stale: Boolean = false) = ShotResult.Err(msg, seq, stale)
+    if (data == null) return err("Missing MediaProjection consent data")
     val (w, h) = screenSizePixels()
-    if (w <= 0 || h <= 0) return ShotResult.Err("Invalid screen size ${w}x$h")
+    if (w <= 0 || h <= 0) return err("Invalid screen size ${w}x$h")
 
     val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-    val projection: MediaProjection =
-      mpm.getMediaProjection(resultCode, data) ?: return ShotResult.Err("Cannot create MediaProjection")
+    val projection: MediaProjection = try {
+      mpm.getMediaProjection(resultCode, data)
+        ?: return err("Cannot create MediaProjection (token hết hạn?)", stale = true)
+    } catch (e: SecurityException) {
+      return err("Projection bị từ chối: ${e.message}", stale = true)
+    } catch (t: Throwable) {
+      return err(
+        "Projection failed: ${t.message ?: t.toString()}",
+        stale = isConsentError(t),
+      )
+    }
+    // Android 14+ bắt buộc registerCallback TRƯỚC createVirtualDisplay,
+    // nếu không sẽ ném "Must register a callback before starting capture".
+    val projectionCallback = object : MediaProjection.Callback() {}
+    try {
+      projection.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
+    } catch (e: Exception) {
+      try {
+        projection.stop()
+      } catch (_: Exception) {
+      }
+      return err("Cannot register projection callback: ${e.message}")
+    }
     var reader: ImageReader? = null
     var vd: VirtualDisplay? = null
     var image: Image? = null
     try {
       reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
-      vd = projection.createVirtualDisplay(
-        "quizshot",
-        w,
-        h,
-        resources.displayMetrics.densityDpi,
-        DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-        reader.surface,
-        null,
-        null,
-      )
+      vd = try {        projection.createVirtualDisplay(
+          "quizshot",
+          w,
+          h,
+          resources.displayMetrics.densityDpi,
+          DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+          reader.surface,
+          null,
+          null,
+        )
+      } catch (e: SecurityException) {
+        return err("VirtualDisplay bị từ chối: ${e.message}", stale = true)
+      } catch (t: Throwable) {
+        return err(
+          "VirtualDisplay failed: ${t.message ?: t.toString()}",
+          stale = isConsentError(t),
+        )
+      }
       // Give the compositor a moment to deliver a frame.
       var attempts = 0
       while (image == null && attempts < 12) {
@@ -174,12 +244,13 @@ class QuizCaptureService : Service() {
         }
         attempts++
       }
-      val img = image ?: return ShotResult.Err("No frame from VirtualDisplay")
-      var bmp = imageToBitmap(img, w, h) ?: return ShotResult.Err("Failed to convert frame")
+      QuizTrace.stage("capture", "seq=$seq vd ready ${w}x$h, frame attempts=$attempts")
+      val img = image ?: return err("No frame from VirtualDisplay")
+      var bmp = imageToBitmap(img, w, h) ?: return err("Failed to convert frame")
       var fw = w
       var fh = h
       if (region != null) {
-        val cropped = tryCrop(bmp, w, h, region) ?: return ShotResult.Err("Bad region")
+        val cropped = tryCrop(bmp, w, h, region) ?: return err("Bad region")
         if (cropped !== bmp) {
           bmp.recycle()
           bmp = cropped
@@ -190,11 +261,12 @@ class QuizCaptureService : Service() {
       val out = File(cacheDir, "quizshot_${System.currentTimeMillis()}.png")
       FileOutputStream(out).use { fos ->
         if (!bmp.compress(Bitmap.CompressFormat.PNG, 100, fos)) {
-          return ShotResult.Err("Failed to save PNG")
+          return err("Failed to save PNG")
         }
       }
       bmp.recycle()
-      return ShotResult.Ok(out.absolutePath, fw, fh)
+      QuizTrace.stage("capture", "seq=$seq saved ${fw}x$fh")
+      return ShotResult.Ok(out.absolutePath, fw, fh, seq)
     } finally {
       try {
         image?.close()
@@ -206,6 +278,10 @@ class QuizCaptureService : Service() {
       }
       try {
         vd?.release()
+      } catch (_: Exception) {
+      }
+      try {
+        projection.unregisterCallback(projectionCallback)
       } catch (_: Exception) {
       }
       try {

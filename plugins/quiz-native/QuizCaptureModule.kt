@@ -44,6 +44,9 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
     @Volatile var lastShotPath: String? = null
     @Volatile var lastShotWidth: Int = 0
     @Volatile var lastShotHeight: Int = 0
+
+    /** Tab bubble yêu cầu mở, nhận qua onNewIntent (khi app đang chạy nền). */
+    @Volatile var pendingTab: String? = null
   }
 
   private var consentPromise: Promise? = null
@@ -67,6 +70,51 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
     lastShotPath = shot.path
     lastShotWidth = shot.width
     lastShotHeight = shot.height
+  }
+
+  /** Map lỗi native thành mã JS ổn định để UI xử lý (xin lại consent, báo bận...). */
+  private fun mapCaptureError(t: Throwable, fallback: String): Pair<String, String> {
+    return when (t) {
+      is QuizShot.BusyException -> Pair("E_BUSY", t.message ?: "Đang chụp")
+      is QuizShot.ConsentStaleException -> Pair("E_CONSENT_STALE", t.message ?: "Consent hết hạn")
+      else -> {
+        val m = t.message ?: t.toString()
+        if (m == "Screen capture consent not granted") Pair("E_NO_CONSENT", m)
+        else Pair(fallback, m)
+      }
+    }
+  }
+
+  @ReactMethod
+  fun clearConsent(p: Promise) {
+    try {
+      consentData = null
+      consentResultCode = -1
+      p.resolve(true)
+    } catch (e: Exception) {
+      p.reject("E_CONSENT", e.message)
+    }
+  }
+
+  @ReactMethod
+  fun getCaptureTrace(p: Promise) {
+    try {
+      val mem = QuizTrace.snapshot()
+      val persisted = QuizTrace.loadPersisted(reactContext)
+      p.resolve(if (mem.isNotBlank()) mem else persisted)
+    } catch (e: Exception) {
+      p.reject("E_TRACE", e.message)
+    }
+  }
+
+  @ReactMethod
+  fun clearCaptureTrace(p: Promise) {
+    try {
+      QuizTrace.clear(reactContext)
+      p.resolve(true)
+    } catch (e: Exception) {
+      p.reject("E_TRACE", e.message)
+    }
   }
 
   // ---------- consent / screen ----------
@@ -111,7 +159,15 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  override fun onNewIntent(intent: Intent) {}
+  override fun onNewIntent(intent: Intent) {
+    // App đang chạy nền được đưa lên foreground: extra nằm ở intent MỚI,
+    // còn activity.intent vẫn là intent cũ → lưu lại để getLaunchTab đọc.
+    try {
+      val tab = intent.getStringExtra("quiz_tab")
+      if (tab != null) pendingTab = tab
+    } catch (_: Exception) {
+    }
+  }
 
   @ReactMethod
   fun getScreenSize(p: Promise) {
@@ -154,8 +210,10 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
         map.putInt("width", shot.width)
         map.putInt("height", shot.height)
         p.resolve(map)
-      } catch (e: Exception) {
-        p.reject(if (e.message == "Screen capture consent not granted") "E_NO_CONSENT" else "E_CAPTURE", e.message)
+      } catch (t: Throwable) {
+        QuizTrace.error("bridge/capture", t)
+        val (code, msg) = mapCaptureError(t, "E_CAPTURE")
+        p.reject(code, msg)
       }
     }
   }
@@ -165,8 +223,9 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
     io.execute {
       try {
         p.resolve(QuizOcrHelper.recognize(reactContext, imagePath))
-      } catch (e: Exception) {
-        p.reject("E_OCR", e.message)
+      } catch (t: Throwable) {
+        QuizTrace.error("bridge/recognize", t)
+        p.reject("E_OCR", t.message)
       }
     }
   }
@@ -184,19 +243,24 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
         val shot = QuizShot.captureSync(reactContext, consentResultCode, consentData, region)
         rememberShot(shot)
         val text = try {
+          QuizTrace.stage("bridge", "ocr start ${shot.width}x${shot.height}")
           QuizOcrHelper.recognize(reactContext, shot.path)
-        } catch (e: Exception) {
-          p.reject("E_OCR", e.message)
+        } catch (t: Throwable) {
+          QuizTrace.error("bridge/ocr", t)
+          p.reject("E_OCR", t.message)
           return@execute
         }
+        QuizTrace.stage("bridge", "ocr done len=${text.length}")
         val map = Arguments.createMap()
         map.putString("uri", shot.path)
         map.putInt("width", shot.width)
         map.putInt("height", shot.height)
         map.putString("text", text)
         p.resolve(map)
-      } catch (e: Exception) {
-        p.reject(if (e.message == "Screen capture consent not granted") "E_NO_CONSENT" else "E_CAPTURE", e.message)
+      } catch (t: Throwable) {
+        QuizTrace.error("bridge/captureAndOcr", t)
+        val (code, msg) = mapCaptureError(t, "E_CAPTURE")
+        p.reject(code, msg)
       }
     }
   }
@@ -221,8 +285,9 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
           } else {
             QuizOcrHelper.recognize(reactContext, shot.path)
           }
-        } catch (e: Exception) {
-          p.reject("E_OCR", e.message)
+        } catch (t: Throwable) {
+          QuizTrace.error("bridge/assistantScan-ocr", t)
+          p.reject("E_OCR", t.message)
           return@execute
         }
         val res = if (useExact) {
@@ -239,8 +304,10 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
         map.putBoolean("matched", res.matched)
         if (res.correctIndex != null) map.putInt("correctIndex", res.correctIndex) else map.putNull("correctIndex")
         p.resolve(map)
-      } catch (e: Exception) {
-        p.reject(if (e.message == "Screen capture consent not granted") "E_NO_CONSENT" else "E_SCAN", e.message)
+      } catch (t: Throwable) {
+        QuizTrace.error("bridge/assistantScan", t)
+        val (code, msg) = mapCaptureError(t, "E_SCAN")
+        p.reject(code, msg)
       }
     }
   }
@@ -443,18 +510,23 @@ class QuizCaptureModule(private val reactContext: ReactApplicationContext) :
   }
 
   /**
-   * Tab mà bubble yêu cầu mở ("Questions" / "Settings" / null).
-   * Đọc từ intent của activity hiện tại rồi xóa để chỉ tiêu thụ một lần.
+   * Tab mà bubble yêu cầu mở ("Questions" / "Settings" / "Region" / null).
+   * Ưu tiên pendingTab từ onNewIntent, sau đó đọc activity.intent.
+   * Tiêu thụ một lần (xóa sau khi đọc).
    */
   @ReactMethod
   fun getLaunchTab(p: Promise) {
     try {
-      val activity = reactApplicationContext.currentActivity
-      val tab = activity?.intent?.getStringExtra("quiz_tab")
-      if (tab != null) {
-        try {
-          activity.intent.removeExtra("quiz_tab")
-        } catch (_: Exception) {
+      var tab: String? = pendingTab
+      pendingTab = null
+      if (tab == null) {
+        val activity = reactApplicationContext.currentActivity
+        tab = activity?.intent?.getStringExtra("quiz_tab")
+        if (tab != null) {
+          try {
+            activity?.intent?.removeExtra("quiz_tab")
+          } catch (_: Exception) {
+          }
         }
       }
       p.resolve(tab)

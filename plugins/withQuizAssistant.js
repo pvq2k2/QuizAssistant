@@ -1,6 +1,6 @@
 // withQuizAssistant — Expo config plugin (CNG-safe).
 // Mỗi lần `expo prebuild` (kể cả --clean) plugin sẽ:
-//  1. Copy 9 file Kotlin (plugins/quiz-native) vào android/.../com/quizassistant/quizassistant/
+//  1. Copy 10 file Kotlin (plugins/quiz-native) vào android/.../com/quizassistant/quizassistant/
 //  2. Copy res/ (accessibility config + strings)
 //  3. Thêm ML Kit text-recognition vào app/build.gradle
 //  4. Khai báo QuizCaptureService (FGS mediaProjection) + FloatingBubbleService
@@ -26,6 +26,7 @@ const KT_FILES = [
   'QuizPrefs.kt',
   'QuizMatcherKt.kt',
   'QuizShot.kt',
+  'QuizTrace.kt',
   'FloatingBubbleService.kt',
   'QuizClickService.kt',
 ];

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, Button, StyleSheet, Image, useWindowDimensions, ActivityIndicator, Alert, ScrollView } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, Button, StyleSheet, Image, useWindowDimensions, ActivityIndicator, Alert, ScrollView, PanResponder } from 'react-native';
 import { theme } from '../theme';
 import {
   isNativeCaptureAvailable,
@@ -13,11 +13,13 @@ import {
 import type { FractionRegion } from '../services/realScan';
 
 // §28: Editor vùng đọc trực quan (dev-build).
-// Chụp preview màn hình thật → kéo khung Q / 0-3 bằng nút nudge → lưu fraction.
-// Cần mở game trước rồi mới vào màn hình này bấm "Chụp preview".
+// - Kéo thân khung để di chuyển, kéo tay nắm góc để resize, chạm để chọn/đặt.
+// - Nút ◀▲▼▶/W/H bên dưới để chỉnh tinh. Lưu dạng fraction 0..1.
 type Target = 'q' | 0 | 1 | 2 | 3;
 
 const DEFAULT_Q: FractionRegion = { fx: 0.08, fy: 0.18, fw: 0.84, fh: 0.16 };
+const HANDLE_PX = 30;
+const TAP_SLOP_PX = 8;
 
 export function OcrRegionScreen() {
   const { width: winW } = useWindowDimensions();
@@ -64,11 +66,13 @@ export function OcrRegionScreen() {
   };
 
   const cur: FractionRegion | null = target === 'q' ? q : answers[target];
-  const apply = (f: FractionRegion) => {
+
+  const applyTo = (t: Target, f: FractionRegion) => {
     const c = clamp(f);
-    if (target === 'q') setQ(c);
-    else setAnswers((prev) => prev.map((v, i) => (i === target ? c : v)));
+    if (t === 'q') setQ(c);
+    else setAnswers((prev) => prev.map((v, i) => (i === t ? c : v)));
   };
+  const apply = (f: FractionRegion) => applyTo(target, f);
   const nudge = (dx: number, dy: number) => {
     if (!cur) return;
     apply({ ...cur, fx: cur.fx + dx, fy: cur.fy + dy });
@@ -97,6 +101,8 @@ export function OcrRegionScreen() {
   const DW = winW - 32;
   const DH = shot ? DW * (shot.height / Math.max(1, shot.width)) : 0;
 
+  const gesture = useBoxGesture(DW, DH, q, answers, target, setTarget, applyTo);
+
   const boxStyle = (f: FractionRegion | null, color: string, active: boolean) =>
     f
       ? {
@@ -116,27 +122,26 @@ export function OcrRegionScreen() {
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ padding: 16 }}>
       <Text style={styles.title}>CẤU HÌNH VÙNG OCR</Text>
-      <Text style={styles.note}>Cách nhanh: mở game → chạm bubble 🤖 → "🎯 Vùng đọc" (tự chụp nền game rồi mở màn này). Hoặc bấm "Chụp preview" dưới đây khi app đang mở.</Text>
+      <Text style={styles.note}>Cách nhanh: mở game → chạm bubble 🤖 → "🎯 Vùng đọc". Trên ảnh: chạm khung để chọn · kéo thân để di chuyển · kéo núm tròn góc để resize · chạm nền để đặt khung đang chọn.</Text>
       <Button title={loading ? 'ĐANG CHỤP…' : shot ? 'Chụp preview lại' : 'Chụp preview'} onPress={snap} disabled={loading} />
       {loading ? <ActivityIndicator style={{ marginTop: 12 }} /> : null}
       {shot ? (
-        <View
-          style={{ width: DW, height: DH, marginTop: 12, backgroundColor: '#000' }}
-          onTouchEnd={(e) => {
-            const { locationX, locationY } = e.nativeEvent;
-            const base = cur ?? { fx: 0, fy: 0, fw: 0.8, fh: 0.1 };
-            apply({
-              ...base,
-              fx: locationX / DW - base.fw / 2,
-              fy: locationY / DH - base.fh / 2,
-            });
-          }}
-        >
+        <View style={{ width: DW, height: DH, marginTop: 12, backgroundColor: '#000' }} {...gesture.panHandlers}>
           <Image source={{ uri: 'file://' + shot.uri }} style={{ width: DW, height: DH }} resizeMode="stretch" />
-          {boxStyle(q, '#22c55e', target === 'q') ? <View style={boxStyle(q, '#22c55e', target === 'q')!} pointerEvents="none" /> : null}
+          {boxStyle(q, '#22c55e', target === 'q') ? (
+            <View style={boxStyle(q, '#22c55e', target === 'q')!} pointerEvents="none">
+              <Text style={styles.tag}>Q</Text>
+              <View style={[styles.handle, { backgroundColor: '#22c55e' }]} />
+            </View>
+          ) : null}
           {answers.map((a, i) => {
             const s = boxStyle(a, '#3b82f6', target === i);
-            return s ? <View key={i} style={s} pointerEvents="none" /> : null;
+            return s ? (
+              <View key={i} style={s} pointerEvents="none">
+                <Text style={styles.tag}>{i}</Text>
+                <View style={[styles.handle, { backgroundColor: '#3b82f6' }]} />
+              </View>
+            ) : null;
           })}
         </View>
       ) : null}
@@ -160,15 +165,12 @@ export function OcrRegionScreen() {
 
       {cur ? (
         <>
-          <Text style={styles.h}>Dịch chuyển</Text>
+          <Text style={styles.h}>Chỉnh tinh</Text>
           <View style={styles.row}>
             <Text style={styles.btn} onPress={() => nudge(-0.01, 0)}>◀</Text>
             <Text style={styles.btn} onPress={() => nudge(0, -0.01)}>▲</Text>
             <Text style={styles.btn} onPress={() => nudge(0, 0.01)}>▼</Text>
             <Text style={styles.btn} onPress={() => nudge(0.01, 0)}>▶</Text>
-          </View>
-          <Text style={styles.h}>Rộng / cao</Text>
-          <View style={styles.row}>
             <Text style={styles.btn} onPress={() => resize(-0.01, 0)}>W−</Text>
             <Text style={styles.btn} onPress={() => resize(0.01, 0)}>W+</Text>
             <Text style={styles.btn} onPress={() => resize(0, -0.01)}>H−</Text>
@@ -181,6 +183,119 @@ export function OcrRegionScreen() {
         <Button title={saving ? 'ĐANG LƯU…' : 'Lưu tất cả vùng'} onPress={save} disabled={saving} />
       </View>
     </ScrollView>
+  );
+}
+
+type Gesture =
+  | { kind: 'move' | 'resize'; target: Target; start: FractionRegion; x0: number; y0: number; moved: boolean }
+  | { kind: 'tap'; x0: number; y0: number; moved: boolean }
+  | null;
+
+/** Kéo-thả/resize trực tiếp trên ảnh preview. Dùng ref để không kẹt closure cũ. */
+function useBoxGesture(
+  DW: number,
+  DH: number,
+  q: FractionRegion,
+  answers: (FractionRegion | null)[],
+  target: Target,
+  setTarget: (t: Target) => void,
+  applyTo: (t: Target, f: FractionRegion) => void,
+) {
+  const live = useRef({ DW, DH, q, answers, target });
+  live.current = { DW, DH, q, answers, target };
+  const applyRef = useRef(applyTo);
+  applyRef.current = applyTo;
+  const setTargetRef = useRef(setTarget);
+  setTargetRef.current = setTarget;
+  const g = useRef<Gesture>(null);
+
+  const allBoxes = (): { t: Target; f: FractionRegion }[] => {
+    const { q: qq, answers: aa, target: tt } = live.current;
+    const list: { t: Target; f: FractionRegion }[] = [{ t: 'q', f: qq }];
+    aa.forEach((a, i) => {
+      if (a) list.push({ t: i as Target, f: a });
+    });
+    // Ưu tiên khung đang chọn khi hit-test chồng lấn.
+    list.sort((a, b) => (a.t === tt ? -1 : 0) - (b.t === tt ? -1 : 0));
+    return list;
+  };
+
+  return useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (e) => {
+          const { DW: w, DH: h } = live.current;
+          const px = e.nativeEvent.locationX ?? 0;
+          const py = e.nativeEvent.locationY ?? 0;
+          const fx = w > 0 ? px / w : 0;
+          const fy = h > 0 ? py / h : 0;
+          const hx = HANDLE_PX / Math.max(1, w);
+          const hy = HANDLE_PX / Math.max(1, h);
+          for (const { t, f } of allBoxes()) {
+            const inHandle =
+              fx >= f.fx + f.fw - hx && fx <= f.fx + f.fw + hx &&
+              fy >= f.fy + f.fh - hy && fy <= f.fy + f.fh + hy;
+            if (inHandle) {
+              g.current = { kind: 'resize', target: t, start: { ...f }, x0: px, y0: py, moved: false };
+              setTargetRef.current(t);
+              return;
+            }
+            if (fx >= f.fx && fx <= f.fx + f.fw && fy >= f.fy && fy <= f.fy + f.fh) {
+              g.current = { kind: 'move', target: t, start: { ...f }, x0: px, y0: py, moved: false };
+              setTargetRef.current(t);
+              return;
+            }
+          }
+          g.current = { kind: 'tap', x0: px, y0: py, moved: false };
+        },
+        onPanResponderMove: (e) => {
+          const cur = g.current;
+          if (!cur || cur.kind === 'tap') {
+            if (cur) {
+              const dx = e.nativeEvent.locationX - cur.x0;
+              const dy = e.nativeEvent.locationY - cur.y0;
+              if (dx * dx + dy * dy > TAP_SLOP_PX * TAP_SLOP_PX) cur.moved = true;
+            }
+            return;
+          }
+          const { DW: w, DH: h } = live.current;
+          const dx = (e.nativeEvent.locationX - cur.x0) / Math.max(1, w);
+          const dy = (e.nativeEvent.locationY - cur.y0) / Math.max(1, h);
+          if (Math.abs(e.nativeEvent.locationX - cur.x0) > TAP_SLOP_PX || Math.abs(e.nativeEvent.locationY - cur.y0) > TAP_SLOP_PX) {
+            cur.moved = true;
+          }
+          if (cur.kind === 'move') {
+            applyRef.current(cur.target, { ...cur.start, fx: cur.start.fx + dx, fy: cur.start.fy + dy });
+          } else {
+            applyRef.current(cur.target, { ...cur.start, fw: cur.start.fw + dx, fh: cur.start.fh + dy });
+          }
+        },
+        onPanResponderRelease: (e) => {
+          const cur = g.current;
+          g.current = null;
+          if (!cur) return;
+          const { DW: w, DH: h } = live.current;
+          const dx = e.nativeEvent.locationX - cur.x0;
+          const dy = e.nativeEvent.locationY - cur.y0;
+          const tapped = !cur.moved && dx * dx + dy * dy <= TAP_SLOP_PX * TAP_SLOP_PX;
+          if (!tapped) return;
+          // Chạm nhanh không kéo: đặt tâm khung ĐANG CHỌN vào điểm chạm.
+          const tt = live.current.target;
+          const box = tt === 'q' ? live.current.q : live.current.answers[tt];
+          const base = box ?? { fx: 0, fy: 0, fw: 0.8, fh: 0.1 };
+          applyRef.current(tt, {
+            ...base,
+            fx: e.nativeEvent.locationX / Math.max(1, w) - base.fw / 2,
+            fy: e.nativeEvent.locationY / Math.max(1, h) - base.fh / 2,
+          });
+        },
+        onPanResponderTerminate: () => {
+          g.current = null;
+        },
+      }),
+    [],
   );
 }
 
@@ -208,4 +323,6 @@ const styles = StyleSheet.create({
   chip: { padding: 10, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, overflow: 'hidden' },
   chipActive: { backgroundColor: theme.colors.success, color: '#fff' },
   btn: { padding: 12, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, fontSize: 16, overflow: 'hidden' },
+  tag: { position: 'absolute', top: -10, left: 2, fontSize: 11, fontWeight: 'bold', color: '#fff', backgroundColor: '#00000088', paddingHorizontal: 4, borderRadius: 4 },
+  handle: { position: 'absolute', right: -8, bottom: -8, width: 16, height: 16, borderRadius: 8, borderWidth: 2, borderColor: '#fff' },
 });

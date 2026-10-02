@@ -8,6 +8,8 @@ import {
   isNativeCaptureAvailable,
   isAccessibilityConnected,
   openAccessibilitySettings,
+  getCaptureTrace,
+  clearCaptureTrace,
 } from '../services/realScan';
 import type { QuizSetId } from '../models/types';
 
@@ -109,6 +111,8 @@ export function SettingsScreen({ navigation }: any) {
       ) : null}
       {testOut ? <Text style={styles.mono}>{testOut}</Text> : null}
 
+      <DiagnosticsBlock />
+
       <Text style={styles.h}>Dữ liệu (§16)</Text>
       <Button title={showExport ? 'Ẩn export' : 'Xem export JSON'} onPress={() => setShowExport((v) => !v)} />
       {showExport ? <Text style={styles.mono} selectable>{store.exportJson('all')}</Text> : null}
@@ -122,6 +126,41 @@ export function SettingsScreen({ navigation }: any) {
 
 function SetPickerHint({ setId }: { setId: QuizSetId }) {
   return <Text style={{ color: '#9ca3af', marginTop: 12 }}>Import không cần đúng bộ đang chọn ({setId}) — mỗi item tự mang quizSetId.</Text>;
+}
+
+// Hộp đen chụp màn hình: xem trace lần chụp gần nhất để gửi dev khi lỗi.
+// (Nhấn giữ vào log để copy.)
+function DiagnosticsBlock() {
+  const [trace, setTrace] = React.useState<string>('');
+  const [open, setOpen] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    try {
+      setTrace(await getCaptureTrace());
+    } catch {
+      setTrace('');
+    }
+  }, []);
+
+  if (!isNativeCaptureAvailable()) return null;
+  return (
+    <View style={{ marginTop: 8 }}>
+      <Text style={styles.h}>Chẩn đoán chụp màn hình</Text>
+      <View style={styles.row}>
+        <Button title={open ? 'Ẩn log' : 'Xem log lần chụp cuối'} onPress={async () => { if (!open) await load(); setOpen((v) => !v); }} />
+        <Button
+          title="Xóa log"
+          color={theme.colors.muted}
+          onPress={async () => { await clearCaptureTrace(); setTrace(''); }}
+        />
+      </View>
+      {open ? (
+        <Text style={styles.mono} selectable>
+          {trace || '(chưa có lần chụp nào được ghi)'}
+        </Text>
+      ) : null}
+    </View>
+  );
 }
 
 function A11yRow() {
